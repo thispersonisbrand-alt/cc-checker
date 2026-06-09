@@ -545,7 +545,7 @@ Welcome {user_name}!
 4000000000000000|12|2026|123
 
 ━━━━━━━━━━━━━━━━
-👑 Bot by @thispersonisbrand
+👑 Bot by @thispersonisbrand537
 """
     
     keyboard = []
