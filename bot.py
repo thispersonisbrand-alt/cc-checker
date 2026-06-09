@@ -487,7 +487,7 @@ Send a .txt file with one card per line:
 Send first 6 digits of card
 
 ━━━━━━━━━━━━━━━━
-👑 Bot by @thispersonisbrand
+👑 Bot by @thispersonisbrand537
 """
     
     keyboard = []
